@@ -539,6 +539,7 @@ export const tools = {
                     name
                 } 
                 summary
+                description
                 id 
             }
         }

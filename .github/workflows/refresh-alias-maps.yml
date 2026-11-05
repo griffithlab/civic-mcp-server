@@ -1,0 +1,67 @@
+# Rebuilds the CIViC alias maps (src/data/*_map.json) once a day. When they
+# change, redeploys the v2 worker and commits the new maps.
+#
+# Needs two repository secrets (Settings > Secrets and variables > Actions):
+#   CLOUDFLARE_API_TOKEN   API token from the "Edit Cloudflare Workers" template
+#   CLOUDFLARE_ACCOUNT_ID  the account that hosts civic-mcp-server-v2
+# Scheduled runs only happen on the default branch. Run it by hand from the
+# Actions tab ("Run workflow").
+name: Refresh CIViC alias maps
+
+on:
+  schedule:
+    - cron: "17 7 * * *" # daily, 07:17 UTC
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: refresh-alias-maps
+  cancel-in-progress: false
+
+jobs:
+  refresh:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - run: npm ci
+
+      - name: Rebuild alias maps from CIViC and the Disease Ontology
+        run: node scripts/refresh-alias-maps.mjs
+
+      - name: Check for changes
+        id: diff
+        run: |
+          if git diff --quiet -- src/data; then
+            echo "changed=false" >> "$GITHUB_OUTPUT"
+            echo "Alias maps unchanged."
+          else
+            echo "changed=true" >> "$GITHUB_OUTPUT"
+            git diff --stat -- src/data
+          fi
+
+      # Deploy before committing: if the deploy fails, nothing is committed and
+      # the next run tries again.
+      - name: Deploy v2 worker
+        if: steps.diff.outputs.changed == 'true'
+        run: npx wrangler deploy --env v2
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+
+      - name: Commit updated maps
+        if: steps.diff.outputs.changed == 'true'
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add src/data/molecular_profile_map.json src/data/disease_name_map.json src/data/therapy_name_map.json
+          git commit -m "Refresh CIViC alias maps ($(date -u +%F))"
+          git push

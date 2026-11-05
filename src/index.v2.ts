@@ -82,35 +82,49 @@ function getTherapyIndex() {
   return (THERAPY_INDEX ??= buildAliasIndex(dTherapyMap));
 }
 
-export function normalizeEntityFast(
-  name: string | undefined | null,
+/** How a user-supplied name was mapped onto a CIViC name (reported back in every response). */
+export type Resolution = {
+  input: string;
+  resolvedTo: string | null;
+  match: "alias_exact" | "fuzzy" | "as_typed" | "not_recognized";
+  score?: number; // similarity (0-1) for fuzzy matches
+};
+
+export function resolveEntity(
+  name: string,
   index: AliasIndex,
   threshold = 0.7,
   opts?: {
-    bypassBooleanOps?: boolean;   // if true, skip normalization when AND/OR present
+    bypassBooleanOps?: boolean;   // if true, skip normalization when AND/OR/NOT present
     fallbackToOriginal?: boolean; // if true, return original if no good match
   }
-): string | undefined {
-  if (!name) return undefined;
-
-  if (opts?.bypassBooleanOps && /\b(?:AND|OR)\b/i.test(name)) {
-    return name; // ✅ don't normalize composite MPs
+): Resolution {
+  // Don't normalize compound or negated MPs ("X AND Y", "NOT X"): fuzzy matching
+  // would turn "NOT KIT D816V" into "kit d816v".
+  if (opts?.bypassBooleanOps && /\b(?:AND|OR|NOT)\b/i.test(name)) {
+    return { input: name, resolvedTo: name, match: "as_typed" };
   }
 
   const qNorm = normalizeStr(name);
 
-  // ✅ exact match first (prevents fuzzy overriding an already-good key)
+  // exact match first (prevents fuzzy overriding an already-good key)
   const exact = index.aliasToPrimary[qNorm];
-  if (exact) return exact;
+  if (exact) return { input: name, resolvedTo: exact, match: "alias_exact" };
 
   // fuzzy match second
   const { bestMatch } = findBestMatch(qNorm, index.candidates);
-
   if (bestMatch.rating >= threshold) {
-    return index.aliasToPrimary[bestMatch.target];
+    return {
+      input: name,
+      resolvedTo: index.aliasToPrimary[bestMatch.target],
+      match: "fuzzy",
+      score: Number(bestMatch.rating.toFixed(3)),
+    };
   }
 
-  return opts?.fallbackToOriginal ? name : undefined;
+  return opts?.fallbackToOriginal
+    ? { input: name, resolvedTo: name, match: "as_typed" }
+    : { input: name, resolvedTo: null, match: "not_recognized" };
 }
 
 //export const dGeneMap:    Record<string, string[]>  = rawGeneMap     as Record<string, string[]>;
@@ -180,7 +194,7 @@ function compact<T extends Record<string, unknown>>(obj: T): Partial<T> {
 
 export const API_CONFIG = {
   name:        "CIViC_MCP",
-  version:     "0.1.0",
+  version:     "0.2.0",
   description: "Fixed‑schema MCP tools for the CIViC GraphQL API",
   mcpSpecVersion: "2025-06-18",
   features: {
@@ -192,27 +206,540 @@ export const API_CONFIG = {
   },
   headers: {
     Accept:      "application/vnd.civicdb.v2+json",
-    "User-Agent": "MCPCivicServer/0.1.0",
+    "User-Agent": "MCPCivicServer/0.2.0",
     "Content-Type": "application/json",
   },
 } as const;
 
 /** -----------------------------------------------------------------
+ *  CIViC GraphQL client: 20 s timeout, one retry, typed errors
+ *  ---------------------------------------------------------------- */
+const CIVIC_GRAPHQL_URL = "https://civicdb.org/api/graphql";
+const CIVIC_TIMEOUT_MS = 20_000;
+
+type ToolErrorDetail = {
+  type:
+    | "UPSTREAM_TIMEOUT"
+    | "UPSTREAM_NETWORK_ERROR"
+    | "UPSTREAM_HTTP_ERROR"
+    | "UPSTREAM_BAD_RESPONSE"
+    | "GRAPHQL_ERROR"
+    | "INTERNAL_ERROR";
+  message: string;
+  httpStatus?: number;
+  retryable: boolean;
+};
+
+class CivicApiError extends Error {
+  constructor(readonly detail: ToolErrorDetail) {
+    super(detail.message);
+  }
+}
+
+async function civicQuery<T>(query: string, variables: Record<string, unknown> = {}): Promise<T> {
+  let lastError: ToolErrorDetail | undefined;
+  for (let attempt = 0; attempt < 2; attempt++) {
+    if (attempt > 0) await new Promise((resolve) => setTimeout(resolve, 500));
+
+    let res: Response;
+    try {
+      res = await fetch(CIVIC_GRAPHQL_URL, {
+        method: "POST",
+        headers: API_CONFIG.headers,
+        body: JSON.stringify({ query, variables }),
+        signal: AbortSignal.timeout(CIVIC_TIMEOUT_MS),
+      });
+    } catch (e) {
+      const timedOut = e instanceof Error && (e.name === "TimeoutError" || e.name === "AbortError");
+      lastError = timedOut
+        ? { type: "UPSTREAM_TIMEOUT", message: `The CIViC API did not respond within ${CIVIC_TIMEOUT_MS / 1000} s.`, retryable: true }
+        : { type: "UPSTREAM_NETWORK_ERROR", message: `Could not reach the CIViC API: ${e instanceof Error ? e.message : String(e)}`, retryable: true };
+      continue;
+    }
+
+    if (!res.ok) {
+      await res.body?.cancel();
+      const retryable = res.status >= 500 || res.status === 429;
+      lastError = { type: "UPSTREAM_HTTP_ERROR", httpStatus: res.status, message: `The CIViC API returned HTTP ${res.status}.`, retryable };
+      if (retryable) continue;
+      break;
+    }
+
+    let body: { data?: T; errors?: Array<{ message?: string }> };
+    try {
+      body = (await res.json()) as typeof body;
+    } catch {
+      lastError = { type: "UPSTREAM_BAD_RESPONSE", httpStatus: res.status, message: "The CIViC API returned a response that is not JSON.", retryable: true };
+      continue;
+    }
+
+    if (body.errors?.length || !body.data) {
+      const message = body.errors?.map((e) => e.message).filter(Boolean).join("; ") || "The CIViC API returned no data.";
+      throw new CivicApiError({ type: "GRAPHQL_ERROR", message, retryable: false });
+    }
+    return body.data;
+  }
+  throw new CivicApiError(lastError ?? { type: "INTERNAL_ERROR", message: "Unknown error calling the CIViC API.", retryable: true });
+}
+
+function toolError(err: unknown, query?: unknown) {
+  const error: ToolErrorDetail =
+    err instanceof CivicApiError
+      ? err.detail
+      : { type: "INTERNAL_ERROR", message: err instanceof Error ? err.message : String(err), retryable: false };
+  return {
+    isError: true,
+    content: [{ type: "text" as const, text: JSON.stringify({ error, query }, null, 2) }],
+  };
+}
+
+/** -----------------------------------------------------------------
+ *  Molecular profile lookup (exact-name matching)
+ *  ---------------------------------------------------------------- */
+type ProfileRef = { id: number; name: string };
+
+/** Case- and whitespace-insensitive form used to compare profile names. */
+const canonName = (s: string) => s.trim().replace(/\s+/g, " ").toLowerCase();
+
+const resolveProfileName = (name: string) =>
+  resolveEntity(name, getMPIndex(), 0.7, { bypassBooleanOps: true, fallbackToOriginal: true });
+
+const PROFILE_SEARCH_QUERY = /* GraphQL */ `
+  query molecularProfiles($name: String, $after: String) {
+    molecularProfiles(name: $name, first: 300, after: $after) {
+      totalCount
+      pageInfo { hasNextPage endCursor }
+      nodes { id name }
+    }
+  }`;
+
+/** Profiles whose name contains `name` (CIViC's substring search). */
+async function searchProfiles(name: string, maxPages = 4): Promise<{ totalCount: number; nodes: ProfileRef[] }> {
+  type Page = {
+    molecularProfiles: {
+      totalCount: number;
+      pageInfo: { hasNextPage: boolean; endCursor: string | null };
+      nodes: ProfileRef[];
+    };
+  };
+  const nodes: ProfileRef[] = [];
+  let totalCount = 0;
+  let after: string | null = null;
+  for (let page = 0; page < maxPages; page++) {
+    const data: Page = await civicQuery<Page>(PROFILE_SEARCH_QUERY, compact({ name, after }));
+    totalCount = data.molecularProfiles.totalCount;
+    nodes.push(...data.molecularProfiles.nodes);
+    if (!data.molecularProfiles.pageInfo.hasNextPage) break;
+    after = data.molecularProfiles.pageInfo.endCursor;
+  }
+  return { totalCount, nodes };
+}
+
+/**
+ * Names a profile may have to count as an exact match: the text as typed, plus
+ * the alias-map name when it came from an alias hit (never from a fuzzy guess,
+ * which could be a different variant). Fusions also accept "<a>::<b> Fusion".
+ */
+function exactNameTargets(r: Resolution): { wanted: Set<string>; searchTerms: string[] } {
+  const bases = [r.input];
+  if (r.resolvedTo && (r.match === "alias_exact" || r.match === "as_typed")) bases.push(r.resolvedTo);
+
+  const wanted = new Set<string>();
+  const searchTerms = new Map<string, string>(); // canonical form -> term sent to CIViC
+  for (const base of bases) {
+    const c = canonName(base);
+    wanted.add(c);
+    if (c.includes("::") && !c.endsWith(" fusion")) wanted.add(`${c} fusion`);
+    if (!searchTerms.has(c)) searchTerms.set(c, base.trim());
+  }
+  return { wanted, searchTerms: [...searchTerms.values()] };
+}
+
+function collectExact(nodes: ProfileRef[], wanted: Set<string>, into: Map<number, ProfileRef>) {
+  for (const n of nodes) {
+    if (wanted.has(canonName(n.name)) && !into.has(n.id)) into.set(n.id, { id: n.id, name: n.name.trim() });
+  }
+}
+
+async function findExactProfiles(r: Resolution): Promise<ProfileRef[]> {
+  const { wanted, searchTerms } = exactNameTargets(r);
+  const found = new Map<number, ProfileRef>();
+  const results = await Promise.all(searchTerms.map((t) => searchProfiles(t)));
+  for (const { nodes } of results) collectExact(nodes, wanted, found);
+  return [...found.values()];
+}
+
+/** -----------------------------------------------------------------
+ *  Shared evidence / assertion listing
+ *  ---------------------------------------------------------------- */
+const STATUS_FILTERS = ["ACCEPTED", "SUBMITTED", "NON_REJECTED"] as const;
+type StatusFilter = (typeof STATUS_FILTERS)[number];
+
+const RESULT_STATUSES = ["ITEMS_FOUND", "PROFILE_FOUND_NO_MATCHING_ITEMS", "NO_SUCH_PROFILE", "NO_MATCHING_ITEMS"] as const;
+type ResultStatus = (typeof RESULT_STATUSES)[number];
+
+type ListInput = {
+  molecularProfileName?: string;
+  diseaseName?: string;
+  therapyName?: string;
+  clinicalSignificance?: string;
+  exactMatch?: boolean;
+  status?: StatusFilter;
+  limit?: number;
+  after?: string;
+};
+
+type FilterReport = Resolution & { applied: boolean; note?: string };
+type ProfileReport = Resolution & {
+  profileMatch: "exact" | "contains";
+  matchedProfiles?: ProfileRef[];
+  matchedProfileCount?: number;
+  note?: string;
+};
+
+function filterReport(r: Resolution | undefined, label: string): FilterReport | undefined {
+  if (!r) return undefined;
+  if (r.match === "not_recognized") {
+    return { ...r, applied: false, note: `Not recognized as a CIViC ${label} name, so this filter was NOT applied.` };
+  }
+  return { ...r, applied: true };
+}
+
+type ListKind = {
+  connection: "evidenceItems" | "assertions";
+  significanceType: "EvidenceSignificance" | "AssertionSignificance";
+  fields: string;
+  defaultLimit: number;
+  idUrlPrefix: string;
+  instructions: string;
+};
+
+const listQuery = (kind: ListKind) => /* GraphQL */ `
+  query ${kind.connection}($molecularProfileId: Int, $molecularProfileName: String, $diseaseName: String, $therapyName: String, $significance: ${kind.significanceType}, $status: EvidenceStatusFilter, $first: Int, $after: String) {
+    ${kind.connection}(molecularProfileId: $molecularProfileId, molecularProfileName: $molecularProfileName, diseaseName: $diseaseName, therapyName: $therapyName, significance: $significance, status: $status, first: $first, after: $after) {
+      totalCount
+      pageInfo { hasNextPage endCursor }
+      nodes { ${kind.fields} }
+    }
+  }`;
+
+function listResult(
+  kind: ListKind,
+  query: unknown,
+  resultStatus: ResultStatus,
+  totalCount: number,
+  items: Record<string, unknown>[],
+  nextCursor: string | null,
+) {
+  const payload = {
+    instructions: kind.instructions,
+    query,
+    resultStatus,
+    totalCount,
+    returnedCount: items.length,
+    hasNextPage: nextCursor !== null,
+    nextCursor,
+    "API Results": items,
+  };
+  return {
+    content: [{ type: "text" as const, text: JSON.stringify(payload, null, 2) }],
+    structuredContent: payload,
+    _meta: { row_count: items.length },
+  };
+}
+
+async function listCivicRecords(kind: ListKind, input: ListInput) {
+  const limit = input.limit ?? kind.defaultLimit;
+  const status: StatusFilter = input.status ?? "NON_REJECTED";
+  const mp = input.molecularProfileName?.trim() ? resolveProfileName(input.molecularProfileName) : undefined;
+  const disease = input.diseaseName?.trim() ? resolveEntity(input.diseaseName, getDiseaseIndex(), 0.7) : undefined;
+  const therapy = input.therapyName?.trim() ? resolveEntity(input.therapyName, getTherapyIndex(), 0.7) : undefined;
+  const exact = Boolean(input.exactMatch && mp);
+
+  const profileReport: ProfileReport | undefined = mp && { ...mp, profileMatch: exact ? "exact" : "contains" };
+  const query = {
+    molecularProfile: profileReport,
+    disease: filterReport(disease, "disease"),
+    therapy: filterReport(therapy, "therapy"),
+    clinicalSignificance: input.clinicalSignificance ?? null,
+    status,
+    limit,
+    after: input.after ?? null,
+  };
+
+  try {
+    let profileId: number | undefined;
+    if (exact && mp && profileReport) {
+      const matched = await findExactProfiles(mp);
+      profileReport.matchedProfiles = matched;
+      const notes: string[] = [];
+      if (mp.match === "fuzzy") {
+        notes.push(`The fuzzy match '${mp.resolvedTo}' was not used for exact matching; only the name as typed was matched.`);
+      }
+      if (matched.length > 1) {
+        notes.push(`${matched.length} CIViC profiles have this exact name; results are for profile ${matched[0].id} only.`);
+      }
+      if (notes.length) profileReport.note = notes.join(" ");
+      if (matched.length === 0) return listResult(kind, query, "NO_SUCH_PROFILE", 0, [], null);
+      profileId = matched[0].id;
+    }
+
+    const variables = compact({
+      molecularProfileId: profileId,
+      molecularProfileName: exact ? undefined : mp?.resolvedTo ?? undefined,
+      diseaseName: disease?.resolvedTo ?? undefined,
+      therapyName: therapy?.resolvedTo ?? undefined,
+      significance: parseClinicalSignificance(input.clinicalSignificance),
+      status,
+      first: limit,
+      after: input.after,
+    });
+
+    type Connection = {
+      totalCount: number;
+      pageInfo: { hasNextPage: boolean; endCursor: string | null };
+      nodes: Array<Record<string, unknown> & { id: number }>;
+    };
+    const data = await civicQuery<Record<string, Connection>>(listQuery(kind), variables);
+    const conn = data[kind.connection];
+
+    let resultStatus: ResultStatus = "ITEMS_FOUND";
+    if (conn.totalCount === 0) {
+      if (!mp || !profileReport) {
+        resultStatus = "NO_MATCHING_ITEMS";
+      } else if (exact) {
+        resultStatus = "PROFILE_FOUND_NO_MATCHING_ITEMS";
+      } else {
+        // Contains mode: is the profile missing from CIViC, or just filtered out?
+        const profiles = await searchProfiles(mp.resolvedTo ?? mp.input, 1);
+        if (profiles.totalCount === 0) {
+          resultStatus = "NO_SUCH_PROFILE";
+        } else {
+          resultStatus = "PROFILE_FOUND_NO_MATCHING_ITEMS";
+          profileReport.matchedProfileCount = profiles.totalCount;
+          profileReport.matchedProfiles = profiles.nodes.slice(0, 10).map((p) => ({ id: p.id, name: p.name.trim() }));
+        }
+      }
+    }
+
+    const items = conn.nodes.map((node) => ({ ...node, url: `${kind.idUrlPrefix}${node.id}` }));
+    const nextCursor = conn.pageInfo.hasNextPage ? conn.pageInfo.endCursor : null;
+    return listResult(kind, query, resultStatus, conn.totalCount, items, nextCursor);
+  } catch (err) {
+    return toolError(err, query);
+  }
+}
+
+/** -----------------------------------------------------------------
+ *  Instructions returned with each response
+ *  ---------------------------------------------------------------- */
+const DISCLAIMER =
+  "Medical Disclaimer: Direct use of the CIViC application and website is intended for purely research and educational purposes. It should not be used for emergencies or taken as medical or professional advice.\n";
+
+const LIST_INSTRUCTIONS =
+  "query: how each input was interpreted. match='alias_exact' means the name was found in CIViC's names and aliases; 'fuzzy' means it was mapped to the closest known name (resolvedTo, with a similarity score), so mention this if it differs from what the user asked; 'as_typed' means it was sent to CIViC unchanged. A filter with applied=false was not recognized and was NOT applied; tell the user.\n" +
+  "molecularProfile.profileMatch: 'contains' returns every profile whose name contains the query, including compound profiles such as 'X AND Y', 'X OR Y' and 'NOT X', so check each item's molecularProfile.name before attributing it to a single variant. 'exact' returns only the profile with exactly that name (matchedProfiles).\n" +
+  "resultStatus: ITEMS_FOUND; PROFILE_FOUND_NO_MATCHING_ITEMS = the molecular profile exists in CIViC but no items match the other filters; NO_SUCH_PROFILE = CIViC has no molecular profile with this name (it has not been curated in CIViC); NO_MATCHING_ITEMS = no molecular profile was given and nothing matched.\n" +
+  "Paging: totalCount is the number of matching records in CIViC and returnedCount the number in this response. If hasNextPage is true, more exist: call again with the same arguments plus after=nextCursor. Never describe a partial page as the complete set.\n" +
+  "status: ACCEPTED = reviewed and accepted by CIViC editors; SUBMITTED = not yet reviewed. Say which items are SUBMITTED when you use them.\n";
+
+const EVIDENCE_INSTRUCTIONS =
+  DISCLAIMER +
+  LIST_INSTRUCTIONS +
+  "Items are sorted by evidence level, then rating.\n" +
+  "id / name: CIViC evidence item ID (name is the EID, e.g. EID1409). molecularProfile.id is the CIViC molecular profile ID.\n" +
+  "evidenceType: Category describing the type of clinical or biological evidence (e.g., predictive, diagnostic).\n" +
+  "evidenceDirection: Indicates whether the evidence supports or refutes the association.\n" +
+  "significance: The clinical relevance of the evidence.\n" +
+  "description: Detailed summary of the evidence from CIViC curators.\n" +
+  "evidenceLevel: Describes the robustness of the study type. A - Validated association, B - Clinical evidence, C - Case study, D - Preclinical evidence, and E - Inferential association\n" +
+  "evidenceRating: Quality score assigned to the evidence by curators (scored 1-5).\n" +
+  "url: Direct link to the CIViC record for this evidence item.\n" +
+  "When returning information to users you MUST cite URLs used for specific information. Always cite both the EIDs and PubMed IDs as links";
+
+const ASSERTION_INSTRUCTIONS =
+  DISCLAIMER +
+  LIST_INSTRUCTIONS +
+  "id / name: CIViC assertion ID (name is the AID, e.g. AID7). molecularProfile.id is the CIViC molecular profile ID.\n" +
+  "assertionType: Category describing the type of clinical or biological evidence (e.g., predictive, diagnostic).\n" +
+  "assertionDirection: Indicates whether the evidence supports or refutes the association.\n" +
+  "significance: The clinical relevance of the evidence.\n" +
+  "summary: Detailed summary of the evidence from CIViC curators.\n" +
+  "url: Direct link to the CIViC record for this evidence item.\n" +
+  "When returning information to users you MUST cite URLs used for specific information. Always cite both the AIDs and PubMed IDs as links";
+
+const BATCH_INSTRUCTIONS =
+  DISCLAIMER +
+  "status: FOUND = CIViC has a molecular profile with exactly this name (case-insensitive; compound profiles such as 'X AND Y' that merely contain it are not counted); NOT_FOUND = CIViC has no molecular profile with this name (it has not been curated in CIViC).\n" +
+  "match / resolvedTo: how the name was interpreted ('alias_exact' = a CIViC name or alias, 'fuzzy' = closest known name, which is not used for exact matching, 'as_typed' = unchanged).\n" +
+  "evidenceCounts: number of CIViC evidence items for the profile by review status (accepted = reviewed by CIViC editors, submitted = not yet reviewed). assertionCount: number of CIViC assertions.\n" +
+  "These are counts only. To read the evidence, call get_variant_evidence with molecularProfileName set to the profile name and exactMatch=true.\n" +
+  "url: link to the molecular profile in CIViC; cite it when reporting these results.";
+
+/** -----------------------------------------------------------------
+ *  Input and output schemas
+ *  ---------------------------------------------------------------- */
+const molecularProfileNameInput = z
+  .string()
+  .optional()
+  .describe("Gene or gene variant, e.g. 'BRAF V600E', 'EGFR', 'BCR::ABL1 Fusion'.");
+const diseaseNameInput = z.string().optional().describe("Disease name, e.g. 'Melanoma', 'Lung Non-small Cell Carcinoma'.");
+const therapyNameInput = z.string().optional().describe("Therapy (drug) name, e.g. 'Vemurafenib'.");
+const exactMatchInput = z
+  .boolean()
+  .optional()
+  .describe(
+    "If true, only return records for the molecular profile whose name exactly matches molecularProfileName (case-insensitive). " +
+      "Default false: every profile whose name contains the text, including compound profiles such as 'EGFR L858R AND EGFR T790M' or 'NOT KIT D816V'.",
+  );
+const statusInput = z
+  .enum(STATUS_FILTERS)
+  .optional()
+  .describe("Review status. ACCEPTED = reviewed by CIViC editors; SUBMITTED = not yet reviewed; NON_REJECTED (default) = both.");
+const limitInput = (defaultLimit: number) =>
+  z.number().int().min(1).max(100).optional().describe(`Maximum number of records to return (1-100, default ${defaultLimit}).`);
+const afterInput = z
+  .string()
+  .optional()
+  .describe("Paging cursor: pass nextCursor from a previous response, with otherwise identical arguments, to get the next page.");
+
+const resolutionShape = {
+  input: z.string(),
+  resolvedTo: z.string().nullable(),
+  match: z.enum(["alias_exact", "fuzzy", "as_typed", "not_recognized"]),
+  score: z.number().optional(),
+};
+const profileRefSchema = z.object({ id: z.number().int(), name: z.string() });
+const filterReportSchema = z.object({ ...resolutionShape, applied: z.boolean(), note: z.string().optional() });
+const listQuerySchema = z.object({
+  molecularProfile: z
+    .object({
+      ...resolutionShape,
+      profileMatch: z.enum(["exact", "contains"]),
+      matchedProfiles: z.array(profileRefSchema).optional(),
+      matchedProfileCount: z.number().int().optional(),
+      note: z.string().optional(),
+    })
+    .optional(),
+  disease: filterReportSchema.optional(),
+  therapy: filterReportSchema.optional(),
+  clinicalSignificance: z.string().nullable(),
+  status: z.enum(STATUS_FILTERS),
+  limit: z.number().int(),
+  after: z.string().nullable(),
+});
+
+const namedSchema = z.object({ name: z.string() }).passthrough();
+const molecularProfileSchema = z
+  .object({
+    id: z.number().int(),
+    name: z.string(),
+    variants: z.array(z.object({ name: z.string(), feature: namedSchema.nullable() }).passthrough()),
+  })
+  .passthrough();
+const recordBaseShape = {
+  id: z.number().int(),
+  name: z.string(),
+  url: z.string(),
+  status: z.string(),
+  significance: z.string(),
+  therapyInteractionType: z.string().nullable(),
+  molecularProfile: molecularProfileSchema,
+  disease: z.object({ displayName: z.string() }).passthrough().nullable(),
+  therapies: z.array(namedSchema),
+  description: z.string(),
+};
+const evidenceItemSchema = z
+  .object({
+    ...recordBaseShape,
+    evidenceType: z.string(),
+    evidenceDirection: z.string(),
+    variantOrigin: z.string(),
+    evidenceLevel: z.string(),
+    evidenceRating: z.number().int().nullable(),
+    source: z.object({ sourceUrl: z.string().nullable() }).passthrough(),
+  })
+  .passthrough();
+const assertionSchema = z
+  .object({
+    ...recordBaseShape,
+    assertionType: z.string(),
+    assertionDirection: z.string(),
+    summary: z.string(),
+  })
+  .passthrough();
+
+const listOutputShape = (item: z.ZodTypeAny) => ({
+  instructions: z.string(),
+  query: listQuerySchema,
+  resultStatus: z.enum(RESULT_STATUSES),
+  totalCount: z.number().int(),
+  returnedCount: z.number().int(),
+  hasNextPage: z.boolean(),
+  nextCursor: z.string().nullable(),
+  "API Results": z.array(item),
+});
+
+const batchOutputShape = {
+  instructions: z.string(),
+  checked: z.number().int(),
+  found: z.number().int(),
+  "API Results": z.array(
+    z.object({
+      ...resolutionShape,
+      status: z.enum(["FOUND", "NOT_FOUND"]),
+      profiles: z.array(
+        z.object({
+          id: z.number().int(),
+          name: z.string(),
+          url: z.string(),
+          evidenceCounts: z.object({ accepted: z.number().int(), submitted: z.number().int(), rejected: z.number().int() }),
+          assertionCount: z.number().int(),
+        }),
+      ),
+    }),
+  ),
+};
+
+const RECORD_PROFILE_FIELDS = "molecularProfile { id name variants { name feature { name } } }";
+
+const EVIDENCE_KIND: ListKind = {
+  connection: "evidenceItems",
+  significanceType: "EvidenceSignificance",
+  fields: `id name status evidenceType evidenceDirection significance therapyInteractionType ${RECORD_PROFILE_FIELDS}
+    disease { displayName } therapies { name } variantOrigin description evidenceLevel evidenceRating source { sourceUrl }`,
+  defaultLimit: 50,
+  idUrlPrefix: "https://identifiers.org/civic.eid:",
+  instructions: EVIDENCE_INSTRUCTIONS,
+};
+
+const ASSERTION_KIND: ListKind = {
+  connection: "assertions",
+  significanceType: "AssertionSignificance",
+  fields: `id name status assertionType assertionDirection significance therapyInteractionType ${RECORD_PROFILE_FIELDS}
+    disease { displayName } therapies { name } summary description`,
+  defaultLimit: 100,
+  idUrlPrefix: "https://identifiers.org/civic.aid:",
+  instructions: ASSERTION_INSTRUCTIONS,
+};
+
+/** -----------------------------------------------------------------
  *  Tool definitions
  *  ---------------------------------------------------------------- */
-type EvidenceInput   = { molecularProfileName?: string; diseaseName?: string; therapyName?: string; clinicalSignificance?: string };
-
 export const tools = {
   /** ───────────────────────── get_variant_evidence ─────────────────────── */
   getVariantEvidence: {
     name: "get_variant_evidence",
+    title: "Get CIViC Variant Evidence",
     description:
-  "Retrieves curated CIViC Evidence Items for cancer-associated variants. Results can be optionally filtered by molecular profile (gene or gene variant),"+
-  " disease, therapy, and clinical significance (e.g., resistance, sensitivity, oncogenicity).",
+      "Retrieves curated CIViC Evidence Items for cancer-associated variants. Results can be optionally filtered by molecular profile (gene or gene variant)," +
+      " disease, therapy, clinical significance (e.g., resistance, sensitivity, oncogenicity) and review status." +
+      " Set exactMatch=true to get only the profile with exactly that name (no compound profiles)." +
+      " Results are paged: check totalCount and hasNextPage, and pass nextCursor as `after` to get more.",
     inputSchema: {
-      molecularProfileName: z.string().optional(),
-      diseaseName:          z.string().optional(),
-      therapyName:          z.string().optional(),
+      molecularProfileName: molecularProfileNameInput,
+      diseaseName:          diseaseNameInput,
+      therapyName:          therapyNameInput,
       clinicalSignificance: z.enum([
           "Predictive: SensitivityResponse",
           "Predictive: Resistance",
@@ -226,279 +753,150 @@ export const tools = {
           "Functional: Loss_of_Function",
           "Functional: Dominant_Negative"
         ]).optional(),
+      exactMatch: exactMatchInput,
+      status:     statusInput,
+      limit:      limitInput(EVIDENCE_KIND.defaultLimit),
+      after:      afterInput,
     },
-    annotations: {
-        readOnlyHint: true,
-        openWorldHint: true,
-      },
-    async handler({ molecularProfileName, diseaseName, therapyName, clinicalSignificance }: EvidenceInput) {
-
-      // const variables = compact({
-      //   molecularProfileName: normalizeEntity(molecularProfileName, dMPMap,   0.7),
-      //   diseaseName:          normalizeEntity(diseaseName,      dDiseaseMap, 0.7),
-      //   therapyName:          normalizeEntity(therapyName,      dTherapyMap, 0.7),
-      //   significance:         parseClinicalSignificance(clinicalSignificance)
-      // });
-
-      const variables = compact({
-        molecularProfileName: normalizeEntityFast(
-                        molecularProfileName,
-                        getMPIndex(),
-                        0.7,
-                        { bypassBooleanOps: true, fallbackToOriginal: true }
-                      ),
-        diseaseName:          normalizeEntityFast(diseaseName,      getDiseaseIndex(), 0.7),
-        therapyName:          normalizeEntityFast(therapyName,      getTherapyIndex(), 0.7),
-        significance:         parseClinicalSignificance(clinicalSignificance)
-      });
-
-      const query = /* GraphQL */ `
-        query evidenceItems($molecularProfileName: String, $diseaseName: String, $therapyName: String, $significance: EvidenceSignificance) {
-        evidenceItems( molecularProfileName: $molecularProfileName, diseaseName: $diseaseName, therapyName: $therapyName, significance: $significance, first: 50) {
-            nodes { 
-                status 
-                evidenceType
-                evidenceDirection 
-                significance
-                therapyInteractionType
-                molecularProfile {
-                    name
-                    variants{
-                        name
-                        feature{
-                            name
-                        }
-                    }
-                }
-                disease{
-                    displayName
-                }
-                therapies{
-                    name
-                }
-                variantOrigin 
-                description
-                evidenceLevel
-                evidenceRating
-                source {
-                  sourceUrl
-                }
-                id 
-            }
-        }
-      }`;
-
-        const res = await fetch("https://civicdb.org/api/graphql", {
-          method: "POST",
-          headers: API_CONFIG.headers,
-          body: JSON.stringify({ query, variables }),
-        }).then((r) => r.json()) as {
-          data?: { evidenceItems?: { nodes: Record<string, unknown>[] } };
-          errors?: unknown[];
-        };
-
-        // Default fallback if query failed
-        const rawItems = res.data?.evidenceItems?.nodes ?? res;
-
-        // Only transform if it's an array of evidence items
-        const evidenceItems = Array.isArray(rawItems)
-          ? rawItems.map((item) => {
-              const copy = { ...item } as Record<string, unknown>;
-              const id = copy["id"];
-              if (typeof id === "string" || typeof id === "number") {
-                copy["url"] = `https://identifiers.org/civic.eid:${id}`;
-              }
-              delete copy["id"];
-              return copy;
-            })
-          : rawItems;
-
-        
-        const nodes = res.data?.evidenceItems?.nodes ?? [];
-
-        const noEvidence = Array.isArray(nodes) && nodes.length === 0;
-        
-              // Build debug ONLY when empty
-              const debug = noEvidence
-                ? {
-                    passed_to_api: variables, // <- after normalization + compact()
-                    normalized: {
-                      molecularProfileName: normalizeEntityFast(
-                        molecularProfileName,
-                        getMPIndex(),
-                        0.7,
-                        { bypassBooleanOps: true, fallbackToOriginal: true }), 
-                      diseaseName: normalizeEntityFast(diseaseName,      getDiseaseIndex(), 0.7),
-                      therapyName: normalizeEntityFast(therapyName,      getTherapyIndex(), 0.7),
-                    },
-                    original: {
-                      molecularProfileName,
-                      diseaseName,
-                      therapyName,
-                    },
-                    graphql_errors: res.errors ?? null,
-                  }
-                : undefined;
-
-        const instructions =
-          "Medical Disclaimer: Direct use of the CIViC application and website is intended for purely research and educational purposes. It should not be used for emergencies or taken as medical or professional advice.\n" +
-          "Response-length restriction: only the top 50 Evidence Items (sorted by level then rating) will be returned. These may not represent the complete set of relevant evidence.\n" +
-          "evidenceType: Category describing the type of clinical or biological evidence (e.g., predictive, diagnostic).\n" +
-          "evidenceDirection: Indicates whether the evidence supports or refutes the association.\n" +
-          "significance: The clinical relevance of the evidence.\n" +
-          "description: Detailed summary of the evidence from CIViC curators.\n" +
-          "evidenceLevel: Describes the robustness of the study type. A - Validated association, B - Clinical evidence, C - Case study, D - Preclinical evidence, and E - Inferential association\n" +
-          "evidenceRating: Quality score assigned to the evidence by curators (scored 1-5).\n" +
-          "url: Direct link to the CIViC record for this evidence item.\n" +
-          "When returning information to users you MUST cite URLs used for specific information. Always cite both the EIDs and PubMed IDs as links";
-
-        const payload = {
-          instructions,
-          "API Results": evidenceItems,
-        };
-
-        return {
-          content: [
-            {
-              type: "text" as const,
-              text: JSON.stringify(payload, null, 2),
-            },
-          ],
-          _meta: {
-            row_count: Array.isArray(evidenceItems) ? evidenceItems.length : undefined,
-          },
-        };
-    },
+    outputSchema: listOutputShape(evidenceItemSchema),
+    handler: (input: ListInput) => listCivicRecords(EVIDENCE_KIND, input),
   },
 
   /** ───────────────────────── get_variant_assertions ───────────────────── */
   getVariantAssertions: {
     name: "get_variant_assertions",
+    title: "Get CIViC Variant Assertions",
     description:
-    "Retrieves curated CIViC Assertions for cancer-associated variants. Results can be optionally filtered by molecular profile (gene or gene variant),"+
-    " disease, therapy, and clinical significance (e.g., resistance, sensitivity, oncogenicity).",
+      "Retrieves curated CIViC Assertions for cancer-associated variants. Results can be optionally filtered by molecular profile (gene or gene variant)," +
+      " disease, therapy, clinical significance (e.g., resistance, sensitivity, oncogenicity) and review status." +
+      " Set exactMatch=true to get only the profile with exactly that name (no compound profiles)." +
+      " Results are paged: check totalCount and hasNextPage, and pass nextCursor as `after` to get more.",
     inputSchema: {
-      molecularProfileName: z.string().optional(),
-      diseaseName:          z.string().optional(),
-      therapyName:          z.string().optional(),
+      molecularProfileName: molecularProfileNameInput,
+      diseaseName:          diseaseNameInput,
+      therapyName:          therapyNameInput,
       clinicalSignificance: z.enum([
           "Predictive: SensitivityResponse",
           "Predictive: Resistance",
+          "Predictive: Reduced_Sensitivity",
           "Predictive: Adverse_Response",
           "Diagnostic: Positive",
+          "Diagnostic: Negative",
           "Prognostic: Better_Outcome",
           "Prognostic: Poor_Outcome",
-          "Predisposing: Predisposition",
-          "Oncogenic: Oncogenicity",
-          "Functional: Gain_of_Function",
-          "Functional: Loss_of_Function",
-          "Functional: Dominant_Negative"
+          "Predisposing: Pathogenic",
+          "Predisposing: Likely_Pathogenic",
+          "Oncogenic: Oncogenic",
+          "Oncogenic: Likely_Oncogenic",
+          "Predisposing/Oncogenic: Uncertain_Significance",
+          "Predisposing/Oncogenic: Likely_Benign",
+          "Predisposing/Oncogenic: Benign"
         ]).optional(),
+      exactMatch: exactMatchInput,
+      status:     statusInput,
+      limit:      limitInput(ASSERTION_KIND.defaultLimit),
+      after:      afterInput,
     },
-      annotations: {
-        readOnlyHint: true,
-        openWorldHint: true,
-      },
-    async handler({ molecularProfileName, diseaseName, therapyName, clinicalSignificance }: EvidenceInput) {
+    outputSchema: listOutputShape(assertionSchema),
+    handler: (input: ListInput) => listCivicRecords(ASSERTION_KIND, input),
+  },
 
-      // const variables = compact({
-      //   molecularProfileName: normalizeEntity(molecularProfileName, dMPMap,   0.7),
-      //   diseaseName:          normalizeEntity(diseaseName,      dDiseaseMap, 0.7),
-      //   therapyName:          normalizeEntity(therapyName,      dTherapyMap, 0.7),
-      //   significance:         parseClinicalSignificance(clinicalSignificance)
-      // });
+  /** ───────────────────────── check_molecular_profiles ─────────────────── */
+  checkMolecularProfiles: {
+    name: "check_molecular_profiles",
+    title: "Check Molecular Profiles in CIViC",
+    description:
+      "Checks up to 50 molecular profile names (gene + variant, e.g. 'KRAS G12C') against CIViC in one call. For each name, returns the CIViC" +
+      " molecular profile with exactly that name (if any), its evidence item counts by review status and its assertion count." +
+      " Use it to see which variants CIViC has curated, then fetch evidence with get_variant_evidence (exactMatch=true).",
+    inputSchema: {
+      molecularProfileNames: z
+        .array(z.string().min(1))
+        .min(1)
+        .max(50)
+        .describe("Molecular profile names to check, e.g. ['KRAS G12C', 'EGFR T790M', 'STK11 D53Tfs*11']."),
+    },
+    outputSchema: batchOutputShape,
+    async handler({ molecularProfileNames }: { molecularProfileNames: string[] }) {
+      const names = molecularProfileNames.map((n) => n.trim()).filter(Boolean);
+      const resolutions = names.map(resolveProfileName);
+      const targets = resolutions.map(exactNameTargets);
 
-      const variables = compact({
-        molecularProfileName: normalizeEntityFast(
-                        molecularProfileName,
-                        getMPIndex(),
-                        0.7,
-                        { bypassBooleanOps: true, fallbackToOriginal: true }
-                      ),
-        diseaseName:          normalizeEntityFast(diseaseName,      getDiseaseIndex(), 0.7),
-        therapyName:          normalizeEntityFast(therapyName,      getTherapyIndex(), 0.7),
-        significance:         parseClinicalSignificance(clinicalSignificance)
-      });
-
-      const query = /* GraphQL */ `
-        query assertions($molecularProfileName: String, $diseaseName: String, $therapyName: String, $significance: EvidenceSignificance) {
-        assertions(molecularProfileName: $molecularProfileName, diseaseName: $diseaseName, therapyName: $therapyName, significance: $significance) {
-            nodes { 
-                status 
-                assertionType
-                assertionDirection 
-                significance
-                therapyInteractionType
-                molecularProfile{
-                name
-                variants{
-                        name
-                        feature{
-                            name
-                        }
-                    }
-                }
-                disease{
-                    displayName
-                }
-                therapies{
-                    name
-                } 
-                summary
-                id 
-            }
+      try {
+        // 1) One substring search per distinct term, batched with GraphQL aliases.
+        const terms = [...new Set(targets.flatMap((t) => t.searchTerms))];
+        const nodesByTerm = new Map<string, ProfileRef[]>();
+        for (let i = 0; i < terms.length; i += 20) {
+          const chunk = terms.slice(i, i + 20);
+          const query = `query (${chunk.map((_, j) => `$t${j}: String`).join(", ")}) { ${chunk
+            .map((_, j) => `t${j}: molecularProfiles(name: $t${j}, first: 300) { nodes { id name } }`)
+            .join(" ")} }`;
+          const data = await civicQuery<Record<string, { nodes: ProfileRef[] }>>(
+            query,
+            Object.fromEntries(chunk.map((t, j) => [`t${j}`, t])),
+          );
+          chunk.forEach((t, j) => nodesByTerm.set(t, data[`t${j}`].nodes));
         }
-      }`;
 
-        const res = await fetch("https://civicdb.org/api/graphql", {
-          method: "POST",
-          headers: API_CONFIG.headers,
-          body: JSON.stringify({ query, variables }),
-        }).then((r) => r.json()) as {
-          data?: { assertions?: { nodes: Record<string, unknown>[] } };
-          errors?: unknown[];
+        // 2) Exact-name matches for each input.
+        const matched = targets.map(({ wanted, searchTerms }) => {
+          const found = new Map<number, ProfileRef>();
+          for (const t of searchTerms) collectExact(nodesByTerm.get(t) ?? [], wanted, found);
+          return [...found.values()];
+        });
+
+        // 3) Evidence and assertion counts for every matched profile.
+        type Detail = {
+          evidenceCountsByStatus: { acceptedCount: number; submittedCount: number; rejectedCount: number };
+          assertions: { totalCount: number };
         };
+        const ids = [...new Set(matched.flat().map((p) => p.id))];
+        const details = new Map<number, Detail>();
+        for (let i = 0; i < ids.length; i += 25) {
+          const chunk = ids.slice(i, i + 25);
+          const query = `query { ${chunk
+            .map((id) => `p${id}: molecularProfile(id: ${id}) { evidenceCountsByStatus { acceptedCount submittedCount rejectedCount } assertions { totalCount } }`)
+            .join(" ")} }`;
+          const data = await civicQuery<Record<string, Detail | null>>(query);
+          for (const id of chunk) {
+            const d = data[`p${id}`];
+            if (d) details.set(id, d);
+          }
+        }
 
-        const rawItems = res.data?.assertions?.nodes ?? res;
-
-        // Only transform if it's an array of assertions
-        const assertions = Array.isArray(rawItems)
-          ? rawItems.map((item) => {
-              const copy = { ...item } as Record<string, unknown>;
-              const id = copy["id"];
-              if (typeof id === "string" || typeof id === "number") {
-                copy["url"] = `https://identifiers.org/civic.aid:${id}`;
-              }
-              delete copy["id"];
-              return copy;
-            })
-          : rawItems;
-
-        const instructions =
-          "Medical Disclaimer: Direct use of the CIViC application and website is intended for purely research and educational purposes. It should not be used for emergencies or taken as medical or professional advice.\n" +
-          "assertionType: Category describing the type of clinical or biological evidence (e.g., predictive, diagnostic).\n" +
-          "assertionDirection: Indicates whether the evidence supports or refutes the association.\n" +
-          "significance: The clinical relevance of the evidence.\n" +
-          "summary: Detailed summary of the evidence from CIViC curators.\n" +
-          "url: Direct link to the CIViC record for this evidence item.\n" +
-          "When returning information to users you MUST cite URLs used for specific information. Always cite both the AIDs and PubMed IDs as links";
+        const results = names.map((_, i) => ({
+          ...resolutions[i],
+          status: matched[i].length > 0 ? ("FOUND" as const) : ("NOT_FOUND" as const),
+          profiles: matched[i].map((p) => {
+            const d = details.get(p.id);
+            return {
+              id: p.id,
+              name: p.name,
+              url: `https://civicdb.org/molecular-profiles/${p.id}/summary`,
+              evidenceCounts: {
+                accepted: d?.evidenceCountsByStatus.acceptedCount ?? 0,
+                submitted: d?.evidenceCountsByStatus.submittedCount ?? 0,
+                rejected: d?.evidenceCountsByStatus.rejectedCount ?? 0,
+              },
+              assertionCount: d?.assertions.totalCount ?? 0,
+            };
+          }),
+        }));
 
         const payload = {
-          instructions,
-          "API Results": assertions,
+          instructions: BATCH_INSTRUCTIONS,
+          checked: results.length,
+          found: results.filter((r) => r.status === "FOUND").length,
+          "API Results": results,
         };
-
         return {
-          content: [
-            {
-              type: "text" as const,
-              text: JSON.stringify(payload, null, 2),
-            },
-          ],
-          _meta: {
-            row_count: Array.isArray(assertions) ? assertions.length : undefined,
-          },
+          content: [{ type: "text" as const, text: JSON.stringify(payload, null, 2) }],
+          structuredContent: payload,
+          _meta: { row_count: results.length },
         };
+      } catch (err) {
+        return toolError(err, { molecularProfileNames: names });
+      }
     },
   },
 } as const;
@@ -512,42 +910,25 @@ class CivicMCP extends McpAgent {
     { instructions: `Use the tools to answer precision oncology questions for the Clinical Interpretations of Variants in Cancer (CIViC) knowledgebase.` }
   );
 
-    async init() {
-    const { getVariantEvidence, getVariantAssertions } = tools;
-
-    // Evidence
-    this.server.registerTool(
-      getVariantEvidence.name,
-      {
-        title: "Get CIViC Variant Evidence",
-        description: getVariantEvidence.description,
-        inputSchema: getVariantEvidence.inputSchema,
-        annotations: {
-          readOnlyHint: true,
-          openWorldHint: true,
-          destructiveHint: false,
-          idempotentHint: true,
-        },
-      } as any,
-      getVariantEvidence.handler as any
-    );
-
-    // Assertions
-    this.server.registerTool(
-      getVariantAssertions.name,
-      {
-        title: "Get CIViC Variant Assertions",
-        description: getVariantAssertions.description,
-        inputSchema: getVariantAssertions.inputSchema,
-        annotations: {
-          readOnlyHint: true,
-          openWorldHint: true,
-          destructiveHint: false,
-          idempotentHint: true,
-        },
-      } as any,
-      getVariantAssertions.handler as any
-    );
+  async init() {
+    for (const tool of Object.values(tools)) {
+      this.server.registerTool(
+        tool.name,
+        {
+          title: tool.title,
+          description: tool.description,
+          inputSchema: tool.inputSchema,
+          outputSchema: tool.outputSchema,
+          annotations: {
+            readOnlyHint: true,
+            openWorldHint: true,
+            destructiveHint: false,
+            idempotentHint: true,
+          },
+        } as any,
+        tool.handler as any
+      );
+    }
   }
 }
 
@@ -722,10 +1103,16 @@ export default {
       return response;
     }
 
-    return new Response(
-      `${API_CONFIG.name} – MCP Server ${API_CONFIG.version}. Use /mcp (Streamable HTTP) or /sse (legacy).`,
-      { status: 200, headers: { "Content-Type": "text/plain" } }
-    );
+   /* ────────────────────────────────────────────────
+       Everything else → 404
+       (Must not be 200, or clients treat fallback OAuth
+       endpoints like /register, /authorize, /token as real.)
+       The info banner is still served at "/" above.
+    ─────────────────────────────────────────────────*/
+    return new Response("Not found", {
+      status: 404,
+      headers: { "Content-Type": "text/plain" },
+    });
   }
 };
 
