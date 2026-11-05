@@ -2,7 +2,7 @@
 
 MCP-supported Chatbot for CIViC users: https://civicdb.org/mcp-chat
 
-Preprint: https://www.biorxiv.org/content/10.1101/2025.10.13.682185v1
+If you use the CIViC MCP Server in published work, please cite: [CIViC MCP: integrating large language models with the Clinical Interpretations of Variants in Cancer](https://academic.oup.com/bioinformaticsadvances/article/6/1/vbag209/8746878)
 
 This is a Cloudflare Workers-based Model Context Protocol (MCP) server that provides tools for querying the CIViC (Clinical Interpretation of Variants in Cancer) API. 
 
@@ -29,50 +29,17 @@ We provide an example of doing this with GPT4o-mini. A personal API key is requi
 python local_hosting/message_MCP_CIViC.py --msg "What is the clinical significance of EGFR variants in CIViC?" 
 ```
 
+## Adding as a Claude Connector
 
-## Using With Claude Desktop
+<img width="3217" height="1094" alt="Claude connector setup" src="https://github.com/user-attachments/assets/b939db57-4a59-4cdf-a38e-620d9516cee4" />
 
-https://github.com/user-attachments/assets/5890f79a-e2fc-49f6-b5f4-ef191d07872d
+Connector V2 URL: https://civic-mcp-server-v2.larscivic.workers.dev/mcp
 
-Install Node.js (https://nodejs.org/)
-
-Click "LTS" (Recommended for Most Users) — this gives you Node.js and npx
-Download and install it like any normal app
-
-Once installed:
-On Windows: Open “Command Prompt” or “PowerShell”
-On macOS: Open “Terminal”
-
-Then run:
-```bash
-node -v
-npx -v
-```
-
-Confirm that both give versions.
-
-Add this configuration to your `claude_desktop_config.json` file:
-
-```json
-{
-  "mcpServers": {
-    "civic-mcp-server": {
-      "command": "npx",
-      "args": [
-        "mcp-remote",
-        "https://civic-mcp-server.larscivic.workers.dev/mcp"
-      ]
-    }
-  }
-}
-```
-
-#### Alternativly, the MCP server can be added as a connector (currently limited to paid Claude users). For more details visit https://support.claude.com/en/articles/11176164-pre-built-web-connectors-using-remote-mcp 
-
+Select sign-in not required
 
 ## Usage
 
-Once configured, restart Claude Desktop. The server provides two main tools:
+The server provides two main tools:
 
 1. **`get_variant_evidence`**: Return up to 50 evidence items for a CIViC molecular profile
 2. **`get_variant_assertions`**: Return CIViC assertions for a molecular profile
@@ -80,7 +47,7 @@ Once configured, restart Claude Desktop. The server provides two main tools:
 
 ## Evaluation Scripts
 
-All evaluation files are located in eval_QA_experiment/
+All evaluation files are located in eval_QA_experiment. The file agent_mode_run_results.csv contains the agent mode prompts and responses; the associated chat URLs were created but may no longer be available. QA_triplet_dataset.csv contains the 100 unique (Molecular Profile, Disease, Therapy) triplets along with their expected answers.
 
 
 ## License
