@@ -149,6 +149,15 @@
     "pik3ca mutation": [
         "pik3ca mutation"
     ],
+    "tmb": [
+        "tmb",
+        "tumor mutation burden"
+    ],
+    "tmb high": [
+        "tmb high",
+        "tumor mutation burden high tumor mutational burden",
+        "tumor mutation burden tmb-h"
+    ],
     "brca1": [
         "brca1",
         "brcai",
@@ -260,15 +269,6 @@
         "nncis thr790met",
         "pig61 rs121434569",
         "pig61 thr790met"
-    ],
-    "tmb": [
-        "tmb",
-        "tumor mutation burden"
-    ],
-    "tmb high": [
-        "tmb high",
-        "tumor mutation burden high tumor mutational burden",
-        "tumor mutation burden tmb-h"
     ],
     "egfr l858r": [
         "egfr l813r",
@@ -1457,6 +1457,22 @@
         "igh::crlf2",
         "igh::crlf2 fusion"
     ],
+    "msi": [
+        " microsatellite instability",
+        "dmmr",
+        "msi"
+    ],
+    "msi high": [
+        " microsatellite instability deficient dna mismatch repair",
+        " microsatellite instability dmmr",
+        " microsatellite instability microsatellite instability high",
+        " microsatellite instability msi-h",
+        "dmmr deficient dna mismatch repair",
+        "dmmr dmmr",
+        "dmmr microsatellite instability high",
+        "dmmr msi-h",
+        "msi high"
+    ],
     "v::nutm1": [
         "nutm1 fusion",
         "v::nutm1"
@@ -1651,22 +1667,6 @@
     ],
     "esr1 mutation": [
         "esr1 mutation"
-    ],
-    "msi": [
-        " microsatellite instability",
-        "dmmr",
-        "msi"
-    ],
-    "msi high": [
-        " microsatellite instability deficient dna mismatch repair",
-        " microsatellite instability dmmr",
-        " microsatellite instability microsatellite instability high",
-        " microsatellite instability msi-h",
-        "dmmr deficient dna mismatch repair",
-        "dmmr dmmr",
-        "dmmr microsatellite instability high",
-        "dmmr msi-h",
-        "msi high"
     ],
     "tp53 deleterious mutation": [
         "tp53 deleterious mutation"
