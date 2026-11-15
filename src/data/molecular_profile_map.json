@@ -77,6 +77,15 @@
         "rearrangement",
         "v::alk"
     ],
+    "tmb": [
+        "tmb",
+        "tumor mutation burden"
+    ],
+    "tmb high": [
+        "tmb high",
+        "tumor mutation burden high tumor mutational burden",
+        "tumor mutation burden tmb-h"
+    ],
     "kras": [
         "'c-k-ras",
         "c-k-ras",
@@ -102,15 +111,6 @@
     ],
     "kras mutation": [
         "kras mutation"
-    ],
-    "tmb": [
-        "tmb",
-        "tumor mutation burden"
-    ],
-    "tmb high": [
-        "tmb high",
-        "tumor mutation burden high tumor mutational burden",
-        "tumor mutation burden tmb-h"
     ],
     "dnmt3a": [
         "dnmt3a",
