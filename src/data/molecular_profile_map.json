@@ -950,6 +950,11 @@
         "runx1::runx1t1",
         "runx1::runx1t1 fusion"
     ],
+    "dek::nup214": [
+        "dek-nup214",
+        "dek::nup214",
+        "dek::nup214 fusion"
+    ],
     "pik3ca h1047r": [
         "ccm4 his1047arg",
         "ccm4 rs121913279",
@@ -1290,11 +1295,6 @@
     ],
     "rrm1 underexpression": [
         "rrm1 underexpression"
-    ],
-    "dek::nup214": [
-        "dek-nup214",
-        "dek::nup214",
-        "dek::nup214 fusion"
     ],
     "bap1": [
         "bap1",
@@ -41832,5 +41832,9 @@
     ],
     "smarca4 g1232d": [
         "smarca4 g1232d"
+    ],
+    "ntrk3::ajuba": [
+        "ntrk3::ajuba",
+        "ntrk3::ajuba fusion"
     ]
 }
