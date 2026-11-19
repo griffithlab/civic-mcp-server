@@ -41840,5 +41840,21 @@
     "kmt2a::mllt1": [
         "kmt2a::mllt1",
         "kmt2a::mllt1 fusion"
+    ],
+    "h3-3b p99l": [
+        "h3-3b p99l"
+    ],
+    "h3-3b p111l": [
+        "h3-3b p111l"
+    ],
+    "h3c10": [
+        "h3/k",
+        "h3c10",
+        "h3f1k",
+        "h3fk",
+        "hist1h3h"
+    ],
+    "h3c10 d82d": [
+        "h3c10 d82d"
     ]
 }
