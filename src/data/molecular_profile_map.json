@@ -488,6 +488,31 @@
     "kit exon 11 mutation": [
         "kit exon 11 mutation"
     ],
+    "h3-3a": [
+        "brylib1",
+        "h3-3a",
+        "h3.3a",
+        "h3f3",
+        "h3f3a"
+    ],
+    "h3-3a k28m": [
+        "brylib1 k27m",
+        "brylib1 lys27met",
+        "brylib1 lys28met",
+        "h3-3a k27m",
+        "h3-3a k28m",
+        "h3-3a lys27met",
+        "h3-3a lys28met",
+        "h3.3a k27m",
+        "h3.3a lys27met",
+        "h3.3a lys28met",
+        "h3f3 k27m",
+        "h3f3 lys27met",
+        "h3f3 lys28met",
+        "h3f3a k27m",
+        "h3f3a lys27met",
+        "h3f3a lys28met"
+    ],
     "pml::rara": [
         "pml-rara",
         "pml::rara",
@@ -920,31 +945,6 @@
     "tet2 mutation": [
         "tet2 mutation"
     ],
-    "h3-3a": [
-        "brylib1",
-        "h3-3a",
-        "h3.3a",
-        "h3f3",
-        "h3f3a"
-    ],
-    "h3-3a k28m": [
-        "brylib1 k27m",
-        "brylib1 lys27met",
-        "brylib1 lys28met",
-        "h3-3a k27m",
-        "h3-3a k28m",
-        "h3-3a lys27met",
-        "h3-3a lys28met",
-        "h3.3a k27m",
-        "h3.3a lys27met",
-        "h3.3a lys28met",
-        "h3f3 k27m",
-        "h3f3 lys27met",
-        "h3f3 lys28met",
-        "h3f3a k27m",
-        "h3f3a lys27met",
-        "h3f3a lys28met"
-    ],
     "runx1::runx1t1": [
         "runx1-runx1t1",
         "runx1::runx1t1",
@@ -1216,6 +1216,24 @@
         "fgfr1 fusion",
         "v::fgfr1"
     ],
+    "h3-3a g35r": [
+        "brylib1 g34r",
+        "brylib1 gly34arg",
+        "brylib1 gly35arg",
+        "h3-3a g34r",
+        "h3-3a g35r",
+        "h3-3a gly34arg",
+        "h3-3a gly35arg",
+        "h3.3a g34r",
+        "h3.3a gly34arg",
+        "h3.3a gly35arg",
+        "h3f3 g34r",
+        "h3f3 gly34arg",
+        "h3f3 gly35arg",
+        "h3f3a g34r",
+        "h3f3a gly34arg",
+        "h3f3a gly35arg"
+    ],
     "zfta::rela": [
         "c11orf95::rela",
         "rela fusion",
@@ -1404,6 +1422,24 @@
         "tcf3-pbx1",
         "tcf3::pbx1",
         "tcf3::pbx1 fusion"
+    ],
+    "h3-3a g35v": [
+        "brylib1 g34v",
+        "brylib1 gly34val",
+        "brylib1 gly35val",
+        "h3-3a g34v",
+        "h3-3a g35v",
+        "h3-3a gly34val",
+        "h3-3a gly35val",
+        "h3.3a g34v",
+        "h3.3a gly34val",
+        "h3.3a gly35val",
+        "h3f3 g34v",
+        "h3f3 gly34val",
+        "h3f3 gly35val",
+        "h3f3a g34v",
+        "h3f3a gly34val",
+        "h3f3a gly35val"
     ],
     "ewsr1::fli1": [
         "ews-fli",
@@ -4086,6 +4122,15 @@
     "ccne1 amplification": [
         "ccne1 amplification"
     ],
+    "h3c2": [
+        "h3/l",
+        "h3c2",
+        "h3fl",
+        "hist1h3b"
+    ],
+    "h3c2 k27m": [
+        "h3c2 k27m"
+    ],
     "kras g12r": [
         "'c-k-ras gly12arg",
         "'c-k-ras rs121913530",
@@ -4549,15 +4594,6 @@
     "v::ntrk2": [
         "ntrk2 fusion",
         "v::ntrk2"
-    ],
-    "h3c2": [
-        "h3/l",
-        "h3c2",
-        "h3fl",
-        "hist1h3b"
-    ],
-    "h3c2 k27m": [
-        "h3c2 k27m"
     ],
     "pax5::jak2": [
         "pax5-jak2",
@@ -7016,6 +7052,11 @@
     "keap1 mutation": [
         "keap1 mutation"
     ],
+    "trps1::plag1": [
+        "trps1-plag1",
+        "trps1::plag1",
+        "trps1::plag1 fusion"
+    ],
     "pik3r1": [
         "agm7",
         "grb1",
@@ -9075,24 +9116,6 @@
     "cdkn1a rs1059234": [
         "cdkn1a rs1059234"
     ],
-    "h3-3a g35r": [
-        "brylib1 g34r",
-        "brylib1 gly34arg",
-        "brylib1 gly35arg",
-        "h3-3a g34r",
-        "h3-3a g35r",
-        "h3-3a gly34arg",
-        "h3-3a gly35arg",
-        "h3.3a g34r",
-        "h3.3a gly34arg",
-        "h3.3a gly35arg",
-        "h3f3 g34r",
-        "h3f3 gly34arg",
-        "h3f3 gly35arg",
-        "h3f3a g34r",
-        "h3f3a gly34arg",
-        "h3f3a gly35arg"
-    ],
     "smarcb1 loss of nuclear protein expression": [
         "smarcb1 loss of nuclear protein expression"
     ],
@@ -9381,6 +9404,12 @@
         "p150 rs1057519773",
         "v-abl f336v",
         "v-abl rs1057519773"
+    ],
+    "egfr-as1": [
+        "egfr-as1"
+    ],
+    "egfr-as1 overexpression": [
+        "egfr-as1 overexpression"
     ],
     "kit v560del": [
         "c-kit v555del",
@@ -11804,6 +11833,24 @@
         "bcl2 f104i",
         "bcl2 phe104ile",
         "ppp1r50 phe104ile"
+    ],
+    "h3-3a g35": [
+        "brylib1 g34",
+        "brylib1 gly34",
+        "brylib1 gly35",
+        "h3-3a g34",
+        "h3-3a g35",
+        "h3-3a gly34",
+        "h3-3a gly35",
+        "h3.3a g34",
+        "h3.3a gly34",
+        "h3.3a gly35",
+        "h3f3 g34",
+        "h3f3 gly34",
+        "h3f3 gly35",
+        "h3f3a g34",
+        "h3f3a gly34",
+        "h3f3a gly35"
     ],
     "fgfr2::tacc3": [
         "fgfr2-tacc3",
@@ -32214,24 +32261,6 @@
         "p19arf pro48leu",
         "tp16 pro48leu"
     ],
-    "h3-3a g35v": [
-        "brylib1 g34v",
-        "brylib1 gly34val",
-        "brylib1 gly35val",
-        "h3-3a g34v",
-        "h3-3a g35v",
-        "h3-3a gly34val",
-        "h3-3a gly35val",
-        "h3.3a g34v",
-        "h3.3a gly34val",
-        "h3.3a gly35val",
-        "h3f3 g34v",
-        "h3f3 gly34val",
-        "h3f3 gly35val",
-        "h3f3a g34v",
-        "h3f3a gly34val",
-        "h3f3a gly35val"
-    ],
     "cdkn2a d108h": [
         "cdkn2a d108h"
     ],
@@ -32973,24 +33002,6 @@
     ],
     "tp53 e180k": [
         "tp53 e180k"
-    ],
-    "h3-3a g35": [
-        "brylib1 g34",
-        "brylib1 gly34",
-        "brylib1 gly35",
-        "h3-3a g34",
-        "h3-3a g35",
-        "h3-3a gly34",
-        "h3-3a gly35",
-        "h3.3a g34",
-        "h3.3a gly34",
-        "h3.3a gly35",
-        "h3f3 g34",
-        "h3f3 gly34",
-        "h3f3 gly35",
-        "h3f3a g34",
-        "h3f3a gly34",
-        "h3f3a gly35"
     ],
     "rit1 m90i": [
         "rit1 m90i"
@@ -39985,11 +39996,6 @@
         "ndrg1::plag1",
         "ndrg1::plag1 fusion"
     ],
-    "trps1::plag1": [
-        "trps1-plag1",
-        "trps1::plag1",
-        "trps1::plag1 fusion"
-    ],
     "ptpn11 t507k": [
         "ptpn11 t507k"
     ],
@@ -41857,9 +41863,6 @@
     "h3c10 d82d": [
         "h3c10 d82d"
     ],
-    "egfr-as1": [
-        "egfr-as1"
-    ],
     "egfr-as1 expression": [
         "egfr-as1 expression"
     ],
@@ -41871,10 +41874,11 @@
     "rras q87l": [
         "rras q87l"
     ],
-    "egfr-as1 overexpression": [
-        "egfr-as1 overexpression"
-    ],
     "erbb2 erbb2 low expression": [
         "erbb2 erbb2 low expression"
+    ],
+    "actb::fosb": [
+        "actb::fosb",
+        "actb::fosb fusion"
     ]
 }
