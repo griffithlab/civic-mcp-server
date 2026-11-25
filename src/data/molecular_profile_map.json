@@ -762,6 +762,24 @@
     "egfr overexpression": [
         "egfr overexpression"
     ],
+    "h3-3a g35r": [
+        "brylib1 g34r",
+        "brylib1 gly34arg",
+        "brylib1 gly35arg",
+        "h3-3a g34r",
+        "h3-3a g35r",
+        "h3-3a gly34arg",
+        "h3-3a gly35arg",
+        "h3.3a g34r",
+        "h3.3a gly34arg",
+        "h3.3a gly35arg",
+        "h3f3 g34r",
+        "h3f3 gly34arg",
+        "h3f3 gly35arg",
+        "h3f3a g34r",
+        "h3f3a gly34arg",
+        "h3f3a gly35arg"
+    ],
     "braf v600k": [
         "b-raf rs121913227",
         "b-raf val600lys",
@@ -1215,24 +1233,6 @@
     "v::fgfr1": [
         "fgfr1 fusion",
         "v::fgfr1"
-    ],
-    "h3-3a g35r": [
-        "brylib1 g34r",
-        "brylib1 gly34arg",
-        "brylib1 gly35arg",
-        "h3-3a g34r",
-        "h3-3a g35r",
-        "h3-3a gly34arg",
-        "h3-3a gly35arg",
-        "h3.3a g34r",
-        "h3.3a gly34arg",
-        "h3.3a gly35arg",
-        "h3f3 g34r",
-        "h3f3 gly34arg",
-        "h3f3 gly35arg",
-        "h3f3a g34r",
-        "h3f3a gly34arg",
-        "h3f3a gly35arg"
     ],
     "zfta::rela": [
         "c11orf95::rela",
